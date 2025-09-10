@@ -1,33 +1,33 @@
 
-import React from 'react';
+import React, { forwardRef } from 'react';
 import type { EnemyState } from '../types';
 import { TILE_SIZE } from '../constants';
 
-const Enemy: React.FC<EnemyState> = ({ x, y, isAlive }) => {
+const Enemy = forwardRef<HTMLDivElement, EnemyState>(({ isAlive }, ref) => {
   if (!isAlive) {
+    // Render a squashed goomba, position will be set by the game loop.
     return (
        <div
+        ref={ref}
         className="absolute bg-orange-900 border-2 border-black"
         style={{
-          left: `${x}px`,
-          top: `${y + TILE_SIZE / 2}px`,
           width: `${TILE_SIZE}px`,
           height: `${TILE_SIZE / 2}px`,
           zIndex: 5,
         }}
       ></div>
-    )
+    );
   }
 
   return (
     <div
+      ref={ref}
       className="absolute"
       style={{
-        left: `${x}px`,
-        top: `${y}px`,
         width: `${TILE_SIZE}px`,
         height: `${TILE_SIZE}px`,
         zIndex: 5,
+        // Positioning is now handled imperatively in the game loop.
       }}
     >
         {/* Goomba-like character */}
@@ -49,6 +49,6 @@ const Enemy: React.FC<EnemyState> = ({ x, y, isAlive }) => {
         </div>
     </div>
   );
-};
+});
 
 export default Enemy;

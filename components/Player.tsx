@@ -1,26 +1,19 @@
 
-import React from 'react';
+import React, { forwardRef } from 'react';
 import type { PlayerState } from '../types';
 import { TILE_SIZE } from '../constants';
 
-const Player: React.FC<PlayerState> = ({ x, y, direction, isAlive }) => {
-  const style = {
-    left: `${x}px`,
-    top: `${y}px`,
+const Player = forwardRef<HTMLDivElement, PlayerState>((_, ref) => {
+  const style: React.CSSProperties = {
     width: `${TILE_SIZE}px`,
     height: `${TILE_SIZE}px`,
-    transform: direction === 'left' ? 'scaleX(-1)' : 'scaleX(1)',
-    transition: 'top 0.1s linear, left 0.05s linear',
     zIndex: 10,
+    // Positioning and direction scaling are now handled imperatively in the game loop for performance.
   };
-  
-  if (!isAlive) {
-      style.transition = 'top 0.5s ease-out, transform 0.5s ease-in-out';
-      style.transform = 'rotate(180deg)';
-  }
 
   return (
     <div
+      ref={ref}
       className="absolute"
       style={style}
     >
@@ -38,6 +31,6 @@ const Player: React.FC<PlayerState> = ({ x, y, direction, isAlive }) => {
         </div>
     </div>
   );
-};
+});
 
 export default Player;
