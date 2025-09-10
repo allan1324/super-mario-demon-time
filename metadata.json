@@ -1,0 +1,5 @@
+{
+  "name": "Super Mario Clone",
+  "description": "A 2D platformer game inspired by the classic Super Mario Bros. Use arrow keys to move and jump. Stomp on enemies to defeat them. Reach the castle to win!",
+  "requestFramePermissions": []
+}
