@@ -1,407 +1,360 @@
-
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import Player from './components/Player';
-import Level from './components/Level';
-import Enemy from './components/Enemy';
-import HUD from './components/HUD';
-import StartScreen from './components/StartScreen';
-import GameOverScreen from './components/GameOverScreen';
-import { LEVEL_LAYOUT, TILE_SIZE } from './constants';
+// Fix: Update imports to use TILE_SIZE and import LEVEL_LAYOUT as LEVEL from constants.
+import { useEffect, useRef } from 'react';
+import { TILE_SIZE, GRAVITY, JUMP_VELOCITY, MOVE_ACCEL, MOVE_MAX, FRICTION, TERMINAL_VY, LEVEL_LAYOUT as LEVEL } from './constants';
 import { GameStatus } from './types';
 import type { PlayerState, EnemyState, GameState } from './types';
 
-// Represents the mutable, high-frequency state of a game object.
-// This is managed outside of React state for performance.
-interface GameObject {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-}
+const SOLID = new Set(['#', '=', '?']);
 
-const App: React.FC = () => {
-  const [gameState, setGameState] = useState<GameState>({
-    status: GameStatus.NotStarted,
-    score: 0,
-    lives: 3,
-    level: 1,
-    time: 400,
-  });
+type Camera = { x: number };
 
-  // React state for player now primarily handles non-positional state (direction, alive status)
-  // and serves as initial state for the physics simulation.
-  const [playerState, setPlayerState] = useState<PlayerState>({
-    x: TILE_SIZE * 2,
-    y: TILE_SIZE * 12,
-    vx: 0,
-    vy: 0,
-    isJumping: false,
-    direction: 'right',
-    isAlive: true,
-  });
-  
-  const [enemies, setEnemies] = useState<EnemyState[]>([]);
-  
-  // Refs for direct DOM manipulation
-  const gameContainerRef = useRef<HTMLDivElement>(null);
-  const playerRef = useRef<HTMLDivElement>(null);
-  const enemyRefs = useRef(new Map<string, HTMLDivElement | null>());
+function App() {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Fix: Initialize useRef with null and update type to allow null.
+  const stateRef = useRef<{
+    game: GameState;
+    camera: Camera;
+    player: PlayerState;
+    enemies: EnemyState[];
+    coins: { x: number; y: number; w: number; h: number; taken: boolean; t: number }[];
+    world: { rows: number; cols: number };
+    keys: Set<string>;
+    flag: { x: number; y: number; w: number; h: number } | null;
+  } | null>(null);
 
-  // Ref to hold all high-frequency game state (positions, velocities)
-  // This is the core of the performance optimization.
-  const gameLogicRef = useRef({
-    player: { x: 0, y: 0, vx: 0, vy: 0 },
-    enemies: new Map<string, GameObject>(),
-    cameraX: 0,
-  });
+  // helpers
+  const rows = LEVEL.length;
+  const cols = LEVEL[0].length;
 
-  const keys = useRef<{ [key: string]: boolean }>({});
-  // FIX: Initialize useRef with null and update the type to handle the initial null value.
-  const gameLoopRef = useRef<number | null>(null);
+  function tileAt(tx: number, ty: number) {
+    if (ty < 0 || ty >= rows || tx < 0 || tx >= cols) return '#'; // treat OOB as solid
+    return LEVEL[ty].charAt(tx);
+  }
 
-  const resetPlayer = useCallback(() => {
-    const initialPlayerState: PlayerState = {
-      x: TILE_SIZE * 2,
-      y: TILE_SIZE * 12,
-      vx: 0,
-      vy: 0,
-      isJumping: false,
-      direction: 'right',
-      isAlive: true,
-    };
-    setPlayerState(initialPlayerState);
-    gameLogicRef.current.player = {
-        x: initialPlayerState.x,
-        y: initialPlayerState.y,
-        vx: 0,
-        vy: 0,
-    };
-  }, []);
-  
-  const initializeEnemies = useCallback(() => {
-    const newEnemies: EnemyState[] = [];
-    gameLogicRef.current.enemies.clear();
-    LEVEL_LAYOUT.forEach((row, r) => {
-      row.split('').forEach((cell, c) => {
-        if (cell === 'E') {
-          const id = `enemy-${r}-${c}`;
-          const enemyState: EnemyState = {
-            id,
-            x: c * TILE_SIZE,
-            y: r * TILE_SIZE,
-            vx: -0.5,
-            isAlive: true,
-            direction: 'left',
-          };
-          newEnemies.push(enemyState);
-          gameLogicRef.current.enemies.set(id, {
-              x: enemyState.x,
-              y: enemyState.y,
-              vx: enemyState.vx,
-              vy: 0,
-          });
+  function isSolid(ch: string) {
+    return SOLID.has(ch);
+  }
+
+  function rectOverlap(ax: number, ay: number, aw: number, ah: number, bx: number, by: number, bw: number, bh: number) {
+    return !(ax + aw < bx || bx + bw < ax || ay + ah < by || by + bh < ay);
+  }
+
+  function resolvePhysicsRect(r: { pos: {x: number; y: number;}; vel: {x: number; y: number;}; w: number; h: number; grounded?: boolean }) {
+    // Horizontal resolve
+    r.pos.x += r.vel.x;
+    const xDir = Math.sign(r.vel.x);
+    if (xDir !== 0) {
+      const aheadX = xDir > 0 ? Math.floor((r.pos.x + r.w) / TILE_SIZE) : Math.floor(r.pos.x / TILE_SIZE);
+      const y0 = Math.floor(r.pos.y / TILE_SIZE);
+      const y1 = Math.floor((r.pos.y + r.h - 1) / TILE_SIZE);
+      for (let ty = y0; ty <= y1; ty++) {
+        if (isSolid(tileAt(aheadX, ty))) {
+          r.pos.x = xDir > 0 ? aheadX * TILE_SIZE - r.w - 0.01 : (aheadX + 1) * TILE_SIZE + 0.01;
+          r.vel.x = 0;
+          break;
         }
-      });
-    });
-    setEnemies(newEnemies);
-  }, []);
+      }
+    }
 
-  const startGame = () => {
-    setGameState({
+    // Vertical resolve
+    r.pos.y += r.vel.y;
+    const yDir = Math.sign(r.vel.y);
+    if (yDir !== 0) {
+      const aheadY = yDir > 0 ? Math.floor((r.pos.y + r.h) / TILE_SIZE) : Math.floor(r.pos.y / TILE_SIZE);
+      const x0 = Math.floor(r.pos.x / TILE_SIZE);
+      const x1 = Math.floor((r.pos.x + r.w - 1) / TILE_SIZE);
+      for (let tx = x0; tx <= x1; tx++) {
+        if (isSolid(tileAt(tx, aheadY))) {
+          r.pos.y = yDir > 0 ? aheadY * TILE_SIZE - r.h - 0.01 : (aheadY + 1) * TILE_SIZE + 0.01;
+          r.vel.y = 0;
+          if (yDir > 0 && r.grounded !== undefined) r.grounded = true;
+          break;
+        }
+      }
+    }
+  }
+
+  useEffect(() => {
+    const canvas = canvasRef.current!;
+    const ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
+
+    const keys = new Set<string>();
+
+    // parse level for entities
+    let startX = 2 * TILE_SIZE;
+    let startY = 0;
+    const enemies: EnemyState[] = [];
+    const coins: { x: number; y: number; w: number; h: number; taken: boolean; t: number }[] = [];
+    let flag: { x: number; y: number; w: number; h: number } | null = null;
+
+    for (let y = 0; y < rows; y++) {
+      const row = LEVEL[y];
+      for (let x = 0; x < cols; x++) {
+        const ch = row.charAt(x);
+        if (ch === 'P') {
+          startX = x * TILE_SIZE;
+          startY = (y - 1) * TILE_SIZE;
+        } else if (ch === 'E') {
+          enemies.push({ pos: { x: x * TILE_SIZE, y: (y - 1) * TILE_SIZE }, vel: { x: 0, y: 0 }, w: 28, h: 28, dir: -1, alive: true });
+        } else if (ch === 'C') {
+          coins.push({ x: x * TILE_SIZE + 8, y: y * TILE_SIZE + 8, w: 16, h: 16, taken: false, t: Math.random() * 6.28 });
+        } else if (ch === 'F') {
+          flag = { x: x * TILE_SIZE + TILE_SIZE / 2 - 3, y: (y - 6) * TILE_SIZE, w: 6, h: 7 * TILE_SIZE };
+        }
+      }
+    }
+
+    const player: PlayerState = {
+      pos: { x: startX, y: startY },
+      vel: { x: 0, y: 0 },
+      w: 24,
+      h: 28,
+      grounded: false,
+      alive: true,
+    };
+
+    const camera: Camera = { x: 0 };
+
+    const game: GameState = {
       status: GameStatus.Playing,
       score: 0,
       lives: 3,
-      level: 1,
-      time: 400,
-    });
-    resetPlayer();
-    initializeEnemies();
-    gameLogicRef.current.cameraX = 0;
-  };
-  
-  const handlePlayerDeath = useCallback(() => {
-    if (!playerState.isAlive) return; // Prevent multiple death triggers
-
-    setPlayerState(prev => ({ ...prev, isAlive: false }));
-    gameLogicRef.current.player.vy = -8; // Death bounce
-    setGameState(prev => ({...prev, lives: prev.lives - 1}));
-
-    setTimeout(() => {
-      if (gameState.lives - 1 > 0) {
-        resetPlayer();
-      } else {
-        setGameState(prev => ({...prev, status: GameStatus.GameOver}));
-      }
-    }, 2000);
-  }, [gameState.lives, resetPlayer, playerState.isAlive]);
-
-
-  const checkCollisions = useCallback((x: number, y: number, vx: number, vy: number) => {
-    let onGround = false;
-
-    // World bounds
-    if (x + vx < 0) {
-      x = 0;
-      vx = 0;
-    }
-
-    const checkTile = (px: number, py: number) => {
-      if (py < 0) return null; // No tiles above the map
-      const col = Math.floor(px / TILE_SIZE);
-      const row = Math.floor(py / TILE_SIZE);
-      return LEVEL_LAYOUT[row] && LEVEL_LAYOUT[row][col];
     };
-    
-    // Vertical collision
-    const playerBottom = y + TILE_SIZE;
-    if (vy > 0) { 
-        const leftFoot = checkTile(x + 1, playerBottom + vy);
-        const rightFoot = checkTile(x + TILE_SIZE - 1, playerBottom + vy);
-        if ((leftFoot && leftFoot !== ' ') || (rightFoot && rightFoot !== ' ')) {
-            y = Math.floor(playerBottom / TILE_SIZE) * TILE_SIZE - TILE_SIZE;
-            vy = 0;
-            onGround = true;
-        }
-    } else if (vy < 0) {
-        const leftHead = checkTile(x + 1, y + vy);
-        const rightHead = checkTile(x + TILE_SIZE - 1, y + vy);
-         if ((leftHead && leftHead !== ' ') || (rightHead && rightHead !== ' ')) {
-            y = Math.floor((y + vy) / TILE_SIZE + 1) * TILE_SIZE;
-            vy = 0;
-        }
-    }
-    
-    // Horizontal collision
-    const nextX = x + vx;
-    if (vx > 0) {
-        const head = checkTile(nextX + TILE_SIZE, y + 1);
-        const foot = checkTile(nextX + TILE_SIZE, y + TILE_SIZE -1);
-        if((head && head !== ' ') || (foot && foot !== ' ')) {
-            x = Math.floor((nextX + TILE_SIZE) / TILE_SIZE) * TILE_SIZE - TILE_SIZE;
-            vx = 0;
-        }
-    } else if (vx < 0) {
-        const head = checkTile(nextX, y + 1);
-        const foot = checkTile(nextX, y + TILE_SIZE -1);
-         if((head && head !== ' ') || (foot && foot !== ' ')) {
-            x = Math.floor(nextX / TILE_SIZE + 1) * TILE_SIZE;
-            vx = 0;
-        }
-    }
-    
-    return { x, y, vx, vy, onGround };
-  }, []);
-  
-  const gameLoop = useCallback(() => {
-    if (gameState.status !== GameStatus.Playing) return;
 
-    const logic = gameLogicRef.current;
-    
-    // === Player Logic ===
-    if (playerState.isAlive) {
-      let { vx, vy } = logic.player;
-      const maxSpeed = 3;
-      const acceleration = 0.3;
-      const friction = 0.9;
-      
-      if (keys.current.ArrowLeft) {
-          vx = Math.max(vx - acceleration, -maxSpeed);
-      } else if (keys.current.ArrowRight) {
-          vx = Math.min(vx + acceleration, maxSpeed);
-      } else {
-          vx *= friction;
-          if (Math.abs(vx) < 0.1) vx = 0;
+    stateRef.current = {
+      game,
+      camera,
+      player,
+      enemies,
+      coins,
+      world: { rows, cols },
+      keys,
+      flag,
+    };
+
+    const onDown = (e: KeyboardEvent) => {
+      if (['ArrowLeft', 'ArrowRight', 'ArrowUp', ' '].includes(e.key)) e.preventDefault();
+      keys.add(e.code);
+      if (e.code === 'KeyR') {
+        // quick reset
+        player.pos.x = startX;
+        player.pos.y = startY;
+        player.vel.x = 0;
+        player.vel.y = 0;
+        player.alive = true;
+        game.status = GameStatus.Playing;
+        camera.x = 0;
       }
+    };
+    const onUp = (e: KeyboardEvent) => keys.delete(e.code);
+    window.addEventListener('keydown', onDown);
+    window.addEventListener('keyup', onUp);
 
-      vy += 0.4; // Gravity
+    let raf = 0;
 
-      const newDirection = vx > 0 ? 'right' : vx < 0 ? 'left' : playerState.direction;
-      if (newDirection !== playerState.direction) {
-          setPlayerState(p => ({ ...p, direction: newDirection }));
+    function step() {
+      const s = stateRef.current!;
+      if (s.game.status === GameStatus.Playing) {
+        physics(s);
       }
-      
-      const collisionResult = checkCollisions(logic.player.x, logic.player.y, vx, vy);
-      logic.player.x = collisionResult.x;
-      logic.player.y = collisionResult.y;
-      logic.player.vx = collisionResult.vx;
-      logic.player.vy = collisionResult.vy;
-
-      if (keys.current.ArrowUp && collisionResult.onGround) {
-          logic.player.vy = -9;
-      }
-    } else {
-      // Dead physics
-      logic.player.vy += 0.5;
-      logic.player.y += logic.player.vy;
-    }
-    
-    // Fall off screen check
-    if (logic.player.y > TILE_SIZE * 15) {
-        handlePlayerDeath();
-    }
-    
-    // Win condition
-    const endCastleCol = LEVEL_LAYOUT[0].length - 3;
-    if (logic.player.x / TILE_SIZE > endCastleCol) {
-        setGameState(prev => ({...prev, status: GameStatus.GameWon}));
+      render(ctx, s);
+      raf = requestAnimationFrame(step);
     }
 
-    // === Enemy Logic ===
-    const aliveEnemies = enemies.filter(e => e.isAlive);
-    for (const enemy of aliveEnemies) {
-        const enemyLogic = logic.enemies.get(enemy.id);
-        if (!enemyLogic) continue;
-
-        let { x, vx } = enemyLogic;
-        x += vx;
-
-        const checkTile = (px: number, py: number) => {
-          const col = Math.floor(px / TILE_SIZE);
-          const row = Math.floor(py / TILE_SIZE);
-          return LEVEL_LAYOUT[row] && LEVEL_LAYOUT[row][col];
-        };
-
-        const wallCheckX = vx < 0 ? x : x + TILE_SIZE;
-        const wallTile = checkTile(wallCheckX, enemy.y + TILE_SIZE / 2);
-        const groundCheckX = vx < 0 ? x : x + TILE_SIZE;
-        const groundTile = checkTile(groundCheckX, enemy.y + TILE_SIZE);
-
-        if ((wallTile && wallTile !== ' ') || !groundTile || groundTile === ' ') {
-          vx = -vx;
-          setEnemies(prev => prev.map(e => e.id === enemy.id ? {...e, direction: e.direction === 'left' ? 'right' : 'left'} : e));
-        }
-
-        enemyLogic.x = x;
-        enemyLogic.vx = vx;
-    }
-
-    // === Player-Enemy Collision ===
-    if (playerState.isAlive) {
-      const playerBottom = logic.player.y + TILE_SIZE;
-      for (const enemy of aliveEnemies) {
-          const enemyLogic = logic.enemies.get(enemy.id);
-          if (!enemyLogic) continue;
-
-          const isOverlappingX = logic.player.x < enemyLogic.x + TILE_SIZE && logic.player.x + TILE_SIZE > enemyLogic.x;
-          const isOverlappingY = logic.player.y < enemy.y + TILE_SIZE && playerBottom > enemy.y;
-
-          if (isOverlappingX && isOverlappingY) {
-              const isStomping = logic.player.vy > 0 && playerBottom < enemy.y + TILE_SIZE / 2;
-              if (isStomping) {
-                  setEnemies(prev => prev.map(e => e.id === enemy.id ? {...e, isAlive: false} : e));
-                  logic.player.vy = -5; // Bounce
-                  setGameState(g => ({...g, score: g.score + 100}));
-              } else {
-                  handlePlayerDeath();
-                  break; 
-              }
-          }
-      }
-    }
-    
-    // === Camera and DOM updates ===
-    const targetScrollX = Math.max(0, logic.player.x - window.innerWidth * 0.4);
-    logic.cameraX += (targetScrollX - logic.cameraX) * 0.1; // Smooth lerp
-
-    if (playerRef.current) {
-        const scaleX = playerState.direction === 'left' ? -1 : 1;
-        const rotation = !playerState.isAlive ? 'rotate(180deg)' : '';
-        playerRef.current.style.transform = `translate(${logic.player.x}px, ${logic.player.y}px) scaleX(${scaleX}) ${rotation}`;
-    }
-
-    for (const enemy of enemies) {
-        const enemyDomRef = enemyRefs.current.get(enemy.id);
-        const enemyLogic = logic.enemies.get(enemy.id);
-        if (enemyDomRef && enemyLogic) {
-          if (enemy.isAlive) {
-            enemyDomRef.style.transform = `translate(${enemyLogic.x}px, ${enemy.y}px)`;
-          } else {
-            // position the squashed goomba
-            enemyDomRef.style.transform = `translate(${enemyLogic.x}px, ${enemy.y + TILE_SIZE / 2}px)`;
-          }
-        }
-    }
-
-    if (gameContainerRef.current) {
-        gameContainerRef.current.style.transform = `translateX(-${logic.cameraX}px)`;
-    }
-
-    gameLoopRef.current = requestAnimationFrame(gameLoop);
-  }, [gameState.status, playerState.isAlive, playerState.direction, enemies, checkCollisions, handlePlayerDeath]);
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => { keys.current[e.key] = true; };
-    const handleKeyUp = (e: KeyboardEvent) => { keys.current[e.key] = false; };
-
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
-
-    if (gameState.status === GameStatus.Playing) {
-        gameLoopRef.current = requestAnimationFrame(gameLoop);
-    }
-
+    raf = requestAnimationFrame(step);
     return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
-      if (gameLoopRef.current) {
-        cancelAnimationFrame(gameLoopRef.current);
-      }
+      cancelAnimationFrame(raf);
+      window.removeEventListener('keydown', onDown);
+      window.removeEventListener('keyup', onUp);
     };
-  }, [gameState.status, gameLoop]);
-  
-  useEffect(() => {
-    if (gameState.status !== GameStatus.Playing) return;
-    const timer = setInterval(() => {
-      setGameState(prev => {
-        if (prev.time > 0) {
-          return { ...prev, time: prev.time - 1 };
-        } else {
-          handlePlayerDeath();
-          return prev;
-        }
-      });
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [gameState.status, handlePlayerDeath]);
+  }, []);
 
-  const renderGameContent = () => {
-    switch (gameState.status) {
-      case GameStatus.NotStarted:
-        return <StartScreen onStart={startGame} />;
-      case GameStatus.GameOver:
-        return <GameOverScreen score={gameState.score} onRestart={startGame} />;
-      case GameStatus.GameWon:
-        return <GameOverScreen score={gameState.score} onRestart={startGame} isWin={true}/>
-      case GameStatus.Playing:
-        return (
-          <>
-            <HUD score={gameState.score} lives={gameState.lives} time={gameState.time} level={gameState.level} />
-            <div className="relative w-full h-full overflow-hidden">
-              <div ref={gameContainerRef} className="absolute top-0 left-0">
-                <Level />
-                <Player ref={playerRef} {...playerState} />
-                {enemies.map(enemy => (
-                  <Enemy 
-                    key={enemy.id} 
-                    // FIX: Use a block statement for the ref callback to prevent it from returning a value.
-                    ref={el => { enemyRefs.current.set(enemy.id, el); }} 
-                    {...enemy} 
-                  />
-                ))}
-              </div>
-            </div>
-          </>
-        );
+  function physics(s: NonNullable<typeof stateRef.current>) {
+    const { player, enemies, keys, camera, flag, coins, game } = s;
+
+    // input
+    const left = keys.has('ArrowLeft') || keys.has('KeyA');
+    const right = keys.has('ArrowRight') || keys.has('KeyD');
+    const jump = keys.has('Space') || keys.has('ArrowUp') || keys.has('KeyW');
+
+    const want = (right ? 1 : 0) - (left ? 1 : 0);
+    player.vel.x += want * MOVE_ACCEL;
+    player.vel.x = Math.max(-MOVE_MAX, Math.min(MOVE_MAX, player.vel.x));
+    if (!want) player.vel.x *= FRICTION;
+
+    if (jump && player.grounded) {
+      player.vel.y = JUMP_VELOCITY;
+      player.grounded = false;
     }
-  };
+
+    // gravity
+    player.vel.y += GRAVITY;
+    if (player.vel.y > TERMINAL_VY) player.vel.y = TERMINAL_VY;
+
+    // move & collide
+    player.grounded = false;
+    resolvePhysicsRect(player);
+    
+    // after resolve, update grounded by probing one pixel below feet
+    const feetY = Math.floor((player.pos.y + player.h + 1) / TILE_SIZE);
+    const x0 = Math.floor(player.pos.x / TILE_SIZE);
+    const x1 = Math.floor((player.pos.x + player.w - 1) / TILE_SIZE);
+    let isGrounded = false;
+    for (let tx = x0; tx <= x1; tx++) {
+      if (isSolid(tileAt(tx, feetY))) {
+        isGrounded = true;
+        break;
+      }
+    }
+    player.grounded = isGrounded;
+
+    // coins
+    for (const c of coins) {
+      if (!c.taken && rectOverlap(player.pos.x, player.pos.y, player.w, player.h, c.x, c.y, c.w, c.h)) {
+        c.taken = true;
+        game.score += 100;
+      }
+    }
+
+    // basic enemies
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      // patrol
+      e.vel.x = 1.2 * e.dir;
+      // turn on wall or edge
+      const aheadX = e.dir > 0 ? Math.floor((e.pos.x + e.w + 1) / TILE_SIZE) : Math.floor((e.pos.x - 1) / TILE_SIZE);
+      const footY = Math.floor((e.pos.y + e.h + 1) / TILE_SIZE);
+      const sideY = Math.floor((e.pos.y + e.h * 0.5) / TILE_SIZE);
+      if (isSolid(tileAt(aheadX, sideY)) || !isSolid(tileAt(aheadX, footY))) e.dir *= -1;
+
+      // gravity
+      e.vel.y += GRAVITY * 0.6;
+
+      // move & collide
+      resolvePhysicsRect(e);
+      
+      // collide with player
+      if (
+        rectOverlap(player.pos.x, player.pos.y, player.w, player.h, e.pos.x, e.pos.y, e.w, e.h)
+      ) {
+        const fromAbove = player.vel.y > 0 && player.pos.y + player.h - e.pos.y < 16;
+        if (fromAbove) {
+          e.alive = false;
+          player.vel.y = JUMP_VELOCITY * 0.6;
+          game.score += 200;
+        } else {
+          // simple death
+          player.alive = false;
+          game.status = GameStatus.GameOver;
+        }
+      }
+    }
+    
+    if (player.pos.y > rows * TILE_SIZE) {
+        player.alive = false;
+        game.status = GameStatus.GameOver;
+    }
+
+    // flag win
+    if (flag && rectOverlap(player.pos.x, player.pos.y, player.w, player.h, flag.x, flag.y, flag.w, flag.h)) {
+      s.game.status = GameStatus.GameWon;
+    }
+
+    // camera follow
+    const worldW = cols * TILE_SIZE;
+    const targetX = Math.max(0, Math.min(worldW - 960, player.pos.x - 960 * 0.35));
+    camera.x += (targetX - camera.x) * 0.12;
+  }
+
+  function render(ctx: CanvasRenderingContext2D, s: NonNullable<typeof stateRef.current>) {
+    const W = 960, H = 540;
+    ctx.clearRect(0, 0, W, H);
+
+    // background sky
+    ctx.fillStyle = '#5c94fc';
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.save();
+    ctx.translate(-Math.floor(s.camera.x), 0);
+
+    // tiles
+    for (let y = 0; y < rows; y++) {
+      const row = LEVEL[y];
+      for (let x = 0; x < cols; x++) {
+        const ch = row.charAt(x);
+        const px = x * TILE_SIZE;
+        const py = y * TILE_SIZE;
+        if (ch === '#') {
+          ctx.fillStyle = '#d14f28';
+          ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+          ctx.strokeStyle = '#000';
+          ctx.strokeRect(px, py, TILE_SIZE, TILE_SIZE);
+        } else if (ch === '=') {
+           ctx.fillStyle = '#d14f28';
+          ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+          ctx.strokeStyle = '#000';
+          ctx.strokeRect(px, py, TILE_SIZE, TILE_SIZE);
+        } else if (ch === '?') {
+          ctx.fillStyle = '#fbb__f24';
+          ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+          ctx.fillStyle = '#000';
+          ctx.fillText('?', px + TILE_SIZE/2 - 4, py + TILE_SIZE/2 + 4);
+        } else if (ch === 'F' && s.flag) {
+          ctx.fillStyle = '#9ca3af';
+          ctx.fillRect(s.flag.x, s.flag.y, s.flag.w, s.flag.h);
+          ctx.fillStyle = '#10b981';
+          ctx.fillRect(s.flag.x + 6, s.flag.y + 20, 24, 12);
+        }
+      }
+    }
+
+    // coins
+    for (const c of s.coins) {
+      if (c.taken) continue;
+      ctx.fillStyle = '#fbbf24';
+      ctx.beginPath();
+      ctx.ellipse(c.x + 8, c.y + 8, 8, 8, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // enemies
+    for (const e of s.enemies) {
+      if (!e.alive) continue;
+      ctx.fillStyle = '#9a6a23';
+      ctx.fillRect(e.pos.x, e.pos.y, e.w, e.h);
+    }
+
+    // player
+    const p = s.player;
+    if (p.alive) {
+      ctx.fillStyle = '#e53e3e';
+      ctx.fillRect(p.pos.x, p.pos.y, p.w, p.h);
+    }
+
+    ctx.restore();
+
+    // HUD
+    ctx.fillStyle = '#ffffff';
+    ctx.font = "20px 'Press Start 2P'";
+    ctx.fillText(`SCORE: ${s.game.score}`, 12, 30);
+    ctx.fillText(`STATUS: ${s.game.status}`, 12, 60);
+    if (s.game.status !== GameStatus.Playing) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.fillRect(0,0,W,H);
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
+        ctx.fillText(s.game.status === GameStatus.GameWon ? 'YOU WIN!' : 'GAME OVER', W/2, H/2 - 20);
+        ctx.font = "16px 'Press Start 2P'";
+        ctx.fillText('Press R to Restart', W/2, H/2 + 20);
+    }
+  }
 
   return (
-    <div className="w-screen h-screen bg-[#5c94fc] flex items-center justify-center font-['Press_Start_2P']">
-      <div className="w-[1024px] h-[576px] bg-black relative">
-        {renderGameContent()}
-      </div>
+    <div style={{ display: 'grid', placeItems: 'center', background: '#111', width: '100vw', height: '100vh' }}>
+      <canvas ref={canvasRef} width={960} height={540} style={{ background: 'black', imageRendering: 'pixelated' }} />
+      <div style={{ color: 'white', opacity: 0.8, marginTop: 6, fontFamily: "'Press Start 2P', cursive" }}>← → move, ↑/Space jump, R restart</div>
     </div>
   );
-};
+}
 
 export default App;

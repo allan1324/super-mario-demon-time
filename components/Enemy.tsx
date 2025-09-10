@@ -3,8 +3,9 @@ import React, { forwardRef } from 'react';
 import type { EnemyState } from '../types';
 import { TILE_SIZE } from '../constants';
 
-const Enemy = forwardRef<HTMLDivElement, EnemyState>(({ isAlive }, ref) => {
-  if (!isAlive) {
+// Fix: Destructure `alive` prop instead of non-existent `isAlive`.
+const Enemy = forwardRef<HTMLDivElement, EnemyState>(({ alive }, ref) => {
+  if (!alive) {
     // Render a squashed goomba, position will be set by the game loop.
     return (
        <div
