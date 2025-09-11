@@ -1,0 +1,65 @@
+
+{
+  "name": "plumber_red",
+  "palette": { "bg": "#7ec0ff" },
+  "player": {
+    "src": "player.png",
+    "frameW": 32, "frameH": 64,
+    "scale": 1,
+    "anchor": "bottom",
+    "animations": {
+      "idle":       { "frames": [0], "fps": 6, "loop": true },
+      "run":        { "frames": [1,2,3], "fps": 12, "loop": true },
+      "jump":       { "frames": [4], "fps": 1, "loop": false },
+      "fall":       { "frames": [5], "fps": 1, "loop": false },
+      "idle-big":   { "frames": [6], "fps": 6, "loop": true },
+      "run-big":    { "frames": [7,8,9], "fps": 12, "loop": true },
+      "jump-big":   { "frames": [10], "fps": 1, "loop": false },
+      "fall-big":   { "frames": [11], "fps": 1, "loop": false },
+      "idle-fire":  { "frames": [12], "fps": 6, "loop": true },
+      "run-fire":   { "frames": [13,14,15], "fps": 12, "loop": true },
+      "jump-fire":  { "frames": [16], "fps": 1, "loop": false },
+      "fall-fire":  { "frames": [17], "fps": 1, "loop": false }
+    }
+  },
+  "enemyGoomba": {
+    "src": "goomba.png",
+    "frameW": 32, "frameH": 32,
+    "scale": 1.0,
+    "anchor": "bottom",
+    "animations": {
+      "walk": { "frames": [0,1], "fps": 6, "loop": true },
+      "squash": { "frames": [2], "fps": 1, "loop": false }
+    }
+  },
+  "enemyKoopa": {
+    "src": "koopa.png",
+    "frameW": 32, "frameH": 48,
+    "scale": 1.0,
+    "anchor": "bottom",
+    "animations": {
+      "walk": { "frames": [0,1], "fps": 6, "loop": true },
+      "shell": { "frames": [2], "fps": 1, "loop": false }
+    }
+  },
+  "enemyPiranha": {
+    "src": "piranha.png",
+    "frameW": 32, "frameH": 48,
+    "scale": 1.0,
+    "anchor": "bottom",
+    "animations": {
+      "bite": { "frames": [0,1], "fps": 4, "loop": true }
+    }
+  },
+  "powerUpMushroom": { "src": "mushroom.png", "frameW": 32, "frameH": 32, "animations": { "idle": { "frames": [0], "fps": 1, "loop": false }}},
+  "powerUpFireFlower": { "src": "flower.png", "frameW": 32, "frameH": 32, "animations": { "idle": { "frames": [0,1,2,3], "fps": 8, "loop": true }}},
+  "powerUpStar": { "src": "star.png", "frameW": 32, "frameH": 32, "animations": { "idle": { "frames": [0,1,2,3], "fps": 12, "loop": true }}},
+  "fireball": { "src": "fireball.png", "frameW": 16, "frameH": 16, "animations": { "spin": { "frames": [0,1,2,3], "fps": 20, "loop": true }}},
+  "tiles": { 
+    "src": "tiles.png",
+    "frameW": 32, "frameH": 32,
+    "animations": {
+        "coin": { "frames": [4,5,6,5], "fps": 8, "loop": true }
+    }
+  }
+}
