@@ -1,8 +1,8 @@
 // Fix: Update imports to use TILE_SIZE and import LEVEL_LAYOUT as LEVEL from constants.
 import { useEffect, useRef, useState } from 'react';
-import { TILE_SIZE, GRAVITY, JUMP_VELOCITY, MOVE_ACCEL, MOVE_MAX, FRICTION, TERMINAL_VY, LEVEL_LAYOUT as LEVEL, STAR_DURATION, FIREBALL_SPEED, KOOPA_SHELL_SPEED, KOOPA_SHELL_REVERT_TIME, PIRANHA_EMERGE_TIME } from './constants';
+import { TILE_SIZE, GRAVITY, JUMP_VELOCITY, MOVE_ACCEL, MOVE_MAX, FRICTION, TERMINAL_VY, LEVEL_LAYOUT as LEVEL, STAR_DURATION, FIREBALL_SPEED, KOOPA_SHELL_SPEED, KOOPA_SHELL_REVERT_TIME, PIRANHA_EMERGE_TIME, HAMMERBRO_JUMP_INTERVAL, HAMMERBRO_JUMP_VELOCITY, HAMMERBRO_THROW_INTERVAL, HAMMER_GRAVITY, HAMMER_SPEED_X, HAMMER_SPEED_Y, LAKITU_SPEED, LAKITU_THROW_INTERVAL } from './constants';
 import { GameStatus } from './types';
-import type { PlayerState, EnemyState, GameState, TileState, PowerUpState, FireballState, KoopaState, PowerUpType } from './types';
+import type { PlayerState, EnemyState, GameState, TileState, PowerUpState, FireballState, KoopaState, PowerUpType, HammerState } from './types';
 // Fix: Import SkinConfig and SpriteDef types to resolve TS errors.
 import { type SkinPack, type SkinConfig, type SpriteDef, loadSkin, drawSprite } from './src/skin';
 
@@ -26,6 +26,7 @@ function App() {
     enemies: EnemyState[];
     powerUps: PowerUpState[];
     fireballs: FireballState[];
+    hammers: HammerState[];
     worldGrid: TileState[][];
     coins: { x: number; y: number; w: number; h: number; taken: boolean; t: number }[];
     world: { rows: number; cols: number };
@@ -159,8 +160,18 @@ function App() {
         if (char === 'M') content = 'mushroom';
         if (char === 'I') content = 'fireFlower';
         if (char === 'S') content = 'star';
+        
+        let gridChar = char;
+        if (char === 'H') {
+          newEnemies.push({ type: 'hammerbro', pos: { x: x * TILE_SIZE, y: (y - 2) * TILE_SIZE }, vel: { x: 0, y: 0 }, w: TILE_SIZE, h: TILE_SIZE * 2, dir: -1, alive: true, grounded: false, jumpTimer: HAMMERBRO_JUMP_INTERVAL, throwTimer: Math.random() * HAMMERBRO_THROW_INTERVAL });
+          gridChar = '='; // Hammer Bro stands on a solid block
+        }
+        if (char === 'L') {
+            newEnemies.push({ type: 'lakitu', pos: { x: x * TILE_SIZE, y: y * TILE_SIZE }, vel: { x: 0, y: 0 }, w: TILE_SIZE, h: TILE_SIZE, dir: 1, alive: true, throwTimer: LAKITU_THROW_INTERVAL });
+            gridChar = '.'; // Lakitu floats in the air
+        }
 
-        newWorldGrid[y][x] = { char: char, originalChar: char, hit: false, content };
+        newWorldGrid[y][x] = { char: gridChar, originalChar: char, hit: false, content };
 
         if (char === 'P') playerStart.x = x * TILE_SIZE; playerStart.y = y * TILE_SIZE;
         if (char === 'E') newEnemies.push({ type: 'goomba', pos: { x: x * TILE_SIZE, y: y * TILE_SIZE }, vel: { x: -1, y: 0 }, w: TILE_SIZE, h: TILE_SIZE, dir: -1, alive: true, grounded: false });
@@ -177,6 +188,7 @@ function App() {
       enemies: newEnemies,
       powerUps: [],
       fireballs: [],
+      hammers: [],
       worldGrid: newWorldGrid,
       coins: [],
       world: { rows, cols },
@@ -306,6 +318,33 @@ function App() {
     });
     s.fireballs = s.fireballs.filter(f => f.alive && f.pos.x > camera.x && f.pos.x < camera.x + cols * TILE_SIZE);
 
+    // Update hammers
+    s.hammers.forEach(h => {
+        if (!h.alive) return;
+        h.t += 1/60;
+        h.vel.y += HAMMER_GRAVITY;
+        h.pos.x += h.vel.x;
+        h.pos.y += h.vel.y;
+        if (h.pos.y > s.world.rows * TILE_SIZE) h.alive = false;
+
+        if (player.alive && rectOverlap(player.pos.x, player.pos.y, player.w, player.h, h.pos.x, h.pos.y, h.w, h.h)) {
+            h.alive = false;
+            if (player.invincibilityTimer <= 0) { // Player gets hit
+                player.invincibilityTimer = 1.5; // seconds of flicker
+                if (player.powerUp === 'fire') {
+                    player.powerUp = 'big';
+                } else if (player.powerUp === 'big') {
+                    player.powerUp = 'small';
+                    player.h = TILE_SIZE;
+                    player.pos.y += TILE_SIZE;
+                } else {
+                    player.alive = false;
+                    player.vel.y = JUMP_VELOCITY;
+                }
+            }
+        }
+    });
+    s.hammers = s.hammers.filter(h => h.alive);
 
     // Update enemies
     s.enemies.forEach(e => {
@@ -345,9 +384,48 @@ function App() {
                   }
                   break;
           }
+      } else if (e.type === 'hammerbro') {
+          e.vel.y += GRAVITY;
+          resolvePhysicsRect(e);
+          e.dir = (player.pos.x < e.pos.x) ? -1 : 1;
+
+          if (e.grounded) {
+              e.jumpTimer! -= 1/60;
+              if (e.jumpTimer! <= 0) {
+                  e.vel.y = HAMMERBRO_JUMP_VELOCITY;
+                  e.jumpTimer = HAMMERBRO_JUMP_INTERVAL;
+              }
+          }
+
+          e.throwTimer! -= 1/60;
+          if (e.throwTimer! <= 0) {
+              s.hammers.push({
+                  pos: { x: e.pos.x, y: e.pos.y + TILE_SIZE / 2 },
+                  vel: { x: e.dir * HAMMER_SPEED_X, y: HAMMER_SPEED_Y },
+                  w: 16, h: 16, alive: true, t: 0,
+              });
+              e.throwTimer = HAMMERBRO_THROW_INTERVAL;
+          }
+      } else if (e.type === 'lakitu') {
+          // Follow player
+          const targetX = player.pos.x - e.w / 2;
+          const dx = targetX - e.pos.x;
+          e.dir = dx > 0 ? 1 : -1;
+          if (Math.abs(dx) > LAKITU_SPEED) {
+              e.vel.x = Math.sign(dx) * LAKITU_SPEED;
+          } else {
+              e.vel.x = 0;
+          }
+          e.pos.x += e.vel.x;
+
+          e.throwTimer! -= 1/60;
+          if (e.throwTimer! <= 0) {
+              s.enemies.push({ type: 'spiny', pos: { x: e.pos.x, y: e.pos.y + e.h }, vel: { x: -1, y: 0 }, w: TILE_SIZE, h: TILE_SIZE, dir: -1, alive: true, grounded: false });
+              e.throwTimer = LAKITU_THROW_INTERVAL;
+          }
       } else {
         // Patrol AI: turn at cliffs
-        if (e.type === 'goomba' || (e.type === 'koopa' && e.koopaState === 'walk')) {
+        if (e.type === 'goomba' || e.type === 'spiny' || (e.type === 'koopa' && e.koopaState === 'walk')) {
           if (e.grounded) {
             const checkX = e.dir > 0 ? e.pos.x + e.w : e.pos.x - 1;
             const checkY = e.pos.y + e.h + 1;
@@ -380,7 +458,20 @@ function App() {
           s.game.score += 100;
           player.vel.y = JUMP_VELOCITY * 0.7;
           player.grounded = false;
-          if (e.type === 'goomba') {
+          if (e.type === 'spiny') {
+            if (player.invincibilityTimer <= 0) {
+                player.invincibilityTimer = 1.5;
+                if (player.powerUp === 'fire') player.powerUp = 'big';
+                else if (player.powerUp === 'big') {
+                    player.powerUp = 'small';
+                    player.h = TILE_SIZE;
+                    player.pos.y += TILE_SIZE;
+                } else {
+                    player.alive = false;
+                    player.vel.y = JUMP_VELOCITY;
+                }
+            }
+          } else if (e.type === 'goomba' || e.type === 'hammerbro' || e.type === 'lakitu') {
               e.alive = false;
           } else if (e.type === 'koopa') {
               if (e.koopaState === 'walk') {
@@ -552,22 +643,61 @@ function App() {
       }
     });
 
+    // Draw hammers
+    s.hammers.forEach(h => {
+        if (skin.config.hammer && skin.images.hammer) {
+            // drawSprite(ctx, skin.images.hammer, skin.config.hammer, 'spin', h.t, h.pos.x - camera.x, h.pos.y, h.w, h.h);
+        } else {
+            ctx.save();
+            ctx.translate(h.pos.x - camera.x + h.w/2, h.pos.y + h.h/2);
+            ctx.rotate(h.t * 20); // spinning
+            ctx.fillStyle = 'gray';
+            ctx.fillRect(-h.w/2, -h.h/2, h.w, h.h);
+            ctx.restore();
+        }
+    });
+
     // Draw enemies
     s.enemies.forEach(e => {
-        const key = e.type === 'goomba' ? 'enemyGoomba' : e.type === 'koopa' ? 'enemyKoopa' : 'enemyPiranha';
+        let key: keyof SkinConfig | null = null;
+        switch(e.type) {
+            case 'goomba': key = 'enemyGoomba'; break;
+            case 'koopa': key = 'enemyKoopa'; break;
+            case 'piranha': key = 'enemyPiranha'; break;
+            case 'hammerbro': key = 'enemyHammerBro'; break;
+            case 'lakitu': key = 'enemyLakitu'; break;
+            case 'spiny': key = 'enemySpiny'; break;
+        }
+
         const anim = e.alive ? (e.koopaState === 'shell' || e.koopaState === 'shell_moving' ? 'shell' : (e.type === 'piranha' ? 'bite' : 'walk')) : 'squash';
-        if (skin.config[key] && skin.images[key]) {
+        
+        if (key && skin.config[key] && skin.images[key]) {
+            const spriteDef = skin.config[key] as SpriteDef;
             ctx.save();
-            if (e.dir === -1 && e.koopaState !== 'shell' && e.koopaState !== 'shell_moving') {
+            if (e.dir === -1 && e.type !== 'lakitu' && e.koopaState !== 'shell' && e.koopaState !== 'shell_moving') {
                 ctx.scale(-1, 1);
                 ctx.translate(-(e.pos.x - camera.x) * 2 - e.w, 0);
             }
-            drawSprite(ctx, skin.images[key], skin.config[key] as SpriteDef, anim, s.time, e.pos.x - camera.x, e.pos.y, e.w, e.h);
+            drawSprite(ctx, skin.images[key], spriteDef, anim, s.time, e.pos.x - camera.x, e.pos.y, e.w, e.h);
             ctx.restore();
         } else {
             // fallback rects
-            ctx.fillStyle = e.type === 'goomba' ? '#964B00' : e.type === 'koopa' ? 'green' : 'red';
+            let color = 'magenta'; // Default for unexpected types
+             switch (e.type) {
+                case 'goomba': color = '#964B00'; break;
+                case 'koopa': color = 'green'; break;
+                case 'piranha': color = 'red'; break;
+                case 'hammerbro': color = '#333'; break;
+                case 'lakitu': color = '#f0e68c'; break;
+                case 'spiny': color = '#800000'; break;
+            }
+            ctx.fillStyle = color;
             ctx.fillRect(e.pos.x - camera.x, e.pos.y, e.w, e.alive ? e.h : e.h / 2);
+
+            if (e.type === 'lakitu' && e.alive) {
+                ctx.fillStyle = 'black';
+                ctx.fillRect(e.pos.x - camera.x + e.w/4, e.pos.y + e.h/4, e.w/2, e.h/4);
+            }
         }
     });
 

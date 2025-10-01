@@ -22,7 +22,7 @@ export type PlayerState = {
   invincibilityTimer: number; // For star and post-damage flicker
 };
 
-export type EnemyType = 'goomba' | 'koopa' | 'piranha';
+export type EnemyType = 'goomba' | 'koopa' | 'piranha' | 'hammerbro' | 'lakitu' | 'spiny';
 export type KoopaState = 'walk' | 'shell' | 'shell_moving';
 
 export type EnemyState = {
@@ -41,6 +41,9 @@ export type EnemyState = {
   emergeTimer?: number;
   emergeState?: 'hiding' | 'emerging' | 'showing' | 'retracting';
   startY?: number;
+  // Hammer Bro / Lakitu specific
+  jumpTimer?: number;
+  throwTimer?: number;
 };
 
 export type PowerUpType = 'mushroom' | 'fireFlower' | 'star';
@@ -63,6 +66,15 @@ export type FireballState = {
   t: number;
   // Fix: Add grounded property for physics resolution.
   grounded?: boolean;
+};
+
+export type HammerState = {
+  pos: Vec2;
+  vel: Vec2;
+  w: number;
+  h: number;
+  alive: boolean;
+  t: number; // for rotation
 };
 
 export type TileState = {

@@ -19,10 +19,14 @@ export type SkinConfig = {
   enemyGoomba?: SpriteDef;
   enemyKoopa?: SpriteDef;
   enemyPiranha?: SpriteDef;
+  enemyHammerBro?: SpriteDef;
+  enemyLakitu?: SpriteDef;
+  enemySpiny?: SpriteDef;
   powerUpMushroom?: SpriteDef;
   powerUpFireFlower?: SpriteDef;
   powerUpStar?: SpriteDef;
   fireball?: SpriteDef;
+  hammer?: SpriteDef;
   tiles?: SpriteDef;
   palette?: { bg?: string };
 };
@@ -41,7 +45,7 @@ export async function loadSkin(key: string): Promise<SkinPack> {
   const images: Record<string, HTMLImageElement> = {};
   const toLoad: Array<[string, string]> = [];
 
-  const spriteConfigs: (keyof SkinConfig)[] = ['player', 'enemyGoomba', 'enemyKoopa', 'enemyPiranha', 'powerUpMushroom', 'powerUpFireFlower', 'powerUpStar', 'fireball', 'tiles'];
+  const spriteConfigs: (keyof SkinConfig)[] = ['player', 'enemyGoomba', 'enemyKoopa', 'enemyPiranha', 'enemyHammerBro', 'enemyLakitu', 'enemySpiny', 'powerUpMushroom', 'powerUpFireFlower', 'powerUpStar', 'fireball', 'hammer', 'tiles'];
 
   for (const configKey of spriteConfigs) {
       const spriteDef = config[configKey] as SpriteDef | undefined;
